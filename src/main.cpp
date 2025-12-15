@@ -10,6 +10,7 @@
 #include <limits>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/logging/log.h>
@@ -17,21 +18,29 @@
 
 LOG_MODULE_REGISTER(state_machine, LOG_LEVEL_INF);
 
-// Remove C++23 feature test macros for Zephyr compatibility
-// Zephyr's C++ library is limited
 
-// --- Time constants for Zephyr (in milliseconds) ---
-constexpr uint32_t STATE_UPDATE_INTERVAL_MS = 2000;
-constexpr uint32_t LOG_INTERVAL_MS = 5000;
+// --- C++23 Feature Test Macros ---
+#ifdef __has_include
+#  if __has_include(<version>)
+#    include <version>
+#  endif
+#  if __has_include(<ranges>)
+#    include <ranges>
+#    define HAS_RANGES 1
+#  endif
+#endif
+
+using namespace std::chrono_literals;
+constexpr auto STATE_UPDATE_INTERVAL = 2000ms;
+constexpr auto LOG_INTERVAL = 5000ms;
 
 // --- Time utilities for Zephyr ---
-inline auto zephyr_sleep_for(uint32_t duration_ms) -> void {
-    k_msleep(duration_ms);
+inline auto zephyr_sleep_for(std::chrono::milliseconds duration) {
+    k_msleep(duration.count());
 }
 
 inline auto zephyr_get_task_name() -> const char* {
-    const char* name = k_thread_name_get(k_current_get());
-    return name ? name : "unnamed";
+    return k_thread_name_get(k_current_get());
 }
 
 // --- Concepts & Constraints ---
@@ -118,7 +127,8 @@ public:
     }
 
     // --- Using std::visit with variants ---
-    auto get_state_info() const -> std::string {
+    // --- Using std::visit with variants ---
+	auto get_state_info() const -> std::string {
 		return std::visit([]<typename T>(const T& state) -> std::string {
 			char buffer[128];
 			if constexpr (std::is_same_v<T, IdleState>) {
@@ -229,7 +239,7 @@ public:
         auto [min_val, max_val] = state_machine_.get_buffer_stats();
         
         // Log state with buffer info
-       LOG_INF("State: %s | Buffer: %zu samples | Range: [%.1f, %.1f]",
+        LOG_INF("State: %s | Buffer: %zu samples | Range: [%.1f, %.1f]",
             state_machine_.get_state_info().c_str(),
             std::min(state_machine_.get_buffer_index(), 
                     static_cast<size_t>(10)),
@@ -254,7 +264,7 @@ void state_monitor_thread([[maybe_unused]] void* p1, [[maybe_unused]] void* p2, 
         }
         
         manager.update();
-        zephyr_sleep_for(STATE_UPDATE_INTERVAL_MS);
+        zephyr_sleep_for(STATE_UPDATE_INTERVAL);
     }
 }
 
@@ -274,7 +284,7 @@ void sensor_processor_thread([[maybe_unused]] void* p1, [[maybe_unused]] void* p
             manager.update();
         }
         
-        zephyr_sleep_for(1000);
+        zephyr_sleep_for(1000ms);
     }
 }
 
@@ -322,15 +332,12 @@ void main_thread_entry(void* p1, void* p2, void* p3) {
     
     while (true) {
         LOG_INF("Main task cycle %d", ++cycle);
-        zephyr_sleep_for(LOG_INTERVAL_MS);
+        zephyr_sleep_for(LOG_INTERVAL);
     }
 }
 
 // --- Main entry point ---
 extern "C" int main(void) {
-    // Initialize random number generator
-    // Note: sys_rand32_get() will initialize automatically
-    
     // Create main thread
     k_thread_create(&main_thread, main_stack,
                     K_THREAD_STACK_SIZEOF(main_stack),
