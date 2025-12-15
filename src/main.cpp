@@ -123,19 +123,21 @@ public:
             } else if constexpr (std::is_same_v<T, MonitoringState>) {
                 const auto len = snprintf(buffer.data(), buffer.size(),
                     "Monitoring - Avg: %.2f, Samples: %d",
-                    state.average_value, state.sample_count);
+                    static_cast<double>(state.average_value), 
+                    state.sample_count);
                 return {buffer.data(), static_cast<size_t>(len)};
             } else if constexpr (std::is_same_v<T, AlertState>) {
                 const auto len = snprintf(buffer.data(), buffer.size(),
                     "ALERT: %.*s (Threshold: %.1f)",
                     static_cast<int>(state.message.length()),
                     state.message.data(),
-                    state.threshold);
+                    static_cast<double>(state.threshold));
                 return {buffer.data(), static_cast<size_t>(len)};
             } else if constexpr (std::is_same_v<T, CalibratingState>) {
                 const auto len = snprintf(buffer.data(), buffer.size(),
                     "Calibrating - Ref: %.2f, Step: %d",
-                    state.reference_value, state.calibration_step);
+                    static_cast<double>(state.reference_value), 
+                    state.calibration_step);
                 return {buffer.data(), static_cast<size_t>(len)};
             }
             return "Unknown State"sv;
