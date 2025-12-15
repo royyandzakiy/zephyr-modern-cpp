@@ -1,4 +1,5 @@
 // zephyr_span_visit_concept.cpp
+#include <tuple>
 #include <vector>
 #include <array>
 #include <span>
@@ -190,24 +191,24 @@ public:
     }
 
     // --- Get buffer statistics using span ---
-    auto get_buffer_stats() const -> std::pair<float, float> {
-		if (buffer_index_ == 0) return {0.0f, 0.0f};
-		
-		std::span<const float> active_buffer{
-			sensor_buffer_.data(), 
-			std::min(buffer_index_, sensor_buffer_.size())
-		};
-		
-		float min_val = std::numeric_limits<float>::max();
-		float max_val = std::numeric_limits<float>::lowest();
-		
-		for (auto val : active_buffer) {
-			if (val < min_val) min_val = val;
-			if (val > max_val) max_val = val;
-		}
-		
-		return {min_val, max_val};
-	}
+    auto get_buffer_stats() const -> std::tuple<float, float> {
+        if (buffer_index_ == 0) return {0.0f, 0.0f};
+        
+        std::span<const float> active_buffer{
+            sensor_buffer_.data(), 
+            std::min(buffer_index_, sensor_buffer_.size())
+        };
+        
+        float min_val = std::numeric_limits<float>::max();
+        float max_val = std::numeric_limits<float>::lowest();
+        
+        for (auto val : active_buffer) {
+            min_val = (val < min_val) ? val : min_val;
+            max_val = (val > max_val) ? val : max_val;
+        }
+        
+        return {min_val, max_val};
+    }
 
     auto get_current_state_id() const -> StateId { return current_id_; }
 };
