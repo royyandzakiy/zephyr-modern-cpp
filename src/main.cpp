@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
+#include <version>
+#include <ranges>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/logging/log.h>
@@ -22,10 +24,8 @@ LOG_MODULE_REGISTER(state_machine, LOG_LEVEL_INF);
 // --- C++23 Feature Test Macros ---
 #ifdef __has_include
 #  if __has_include(<version>)
-#    include <version>
 #  endif
 #  if __has_include(<ranges>)
-#    include <ranges>
 #    define HAS_RANGES 1
 #  endif
 #endif
