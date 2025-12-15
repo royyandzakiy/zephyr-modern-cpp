@@ -1,36 +1,30 @@
 // zephyr_span_visit_concept.cpp
 #include <tuple>
-#include <vector>
 #include <array>
 #include <span>
 #include <variant>
-#include <string>
-#include <optional>
+#include <string_view>
 #include <concepts>
 #include <limits>
 #include <cstdio>
-#include <cstdlib>
 #include <chrono>
-#include <version>
 #include <ranges>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/random/random.h>
 
 LOG_MODULE_REGISTER(state_machine, LOG_LEVEL_INF);
 
-
 // --- C++23 Feature Test Macros ---
 #ifdef __has_include
-#  if __has_include(<version>)
-#  endif
 #  if __has_include(<ranges>)
+#    include <ranges>
 #    define HAS_RANGES 1
 #  endif
 #endif
 
 using namespace std::chrono_literals;
+using namespace std::string_view_literals;
 constexpr auto STATE_UPDATE_INTERVAL = 2000ms;
 constexpr auto LOG_INTERVAL = 5000ms;
 
@@ -39,8 +33,9 @@ inline auto zephyr_sleep_for(std::chrono::milliseconds duration) {
     k_msleep(duration.count());
 }
 
-inline auto zephyr_get_task_name() -> const char* {
-    return k_thread_name_get(k_current_get());
+inline auto zephyr_get_task_name() -> std::string_view {
+    const char* name = k_thread_name_get(k_current_get());
+    return name ? std::string_view{name} : "unnamed"sv;
 }
 
 // --- Concepts & Constraints ---
@@ -48,11 +43,6 @@ template<typename T>
 concept SensorType = requires(T t) {
     { t.read() } -> std::convertible_to<float>;
     { t.get_id() } -> std::convertible_to<int>;
-};
-
-template<typename T>
-concept StateType = requires {
-    requires std::is_enum_v<T> || std::is_class_v<T>;
 };
 
 // --- State Variant Definition ---
@@ -82,7 +72,6 @@ using StateVariant = std::variant<
 class TemperatureSensor {
 public:
     auto read() const -> float { 
-        // Simulate temperature reading
         return 23.5f + (sys_rand32_get() % 100) * 0.01f; 
     }
     auto get_id() const -> int { return 1; }
@@ -91,7 +80,6 @@ public:
 class HumiditySensor {
 public:
     auto read() const -> float { 
-        // Simulate humidity reading
         return 45.0f + (sys_rand32_get() % 100) * 0.02f; 
     }
     auto get_id() const -> int { return 2; }
@@ -100,7 +88,6 @@ public:
 class PressureSensor {
 public:
     auto read() const -> float { 
-        // Simulate pressure reading
         return 1013.25f + (sys_rand32_get() % 100) * 0.05f; 
     }
     auto get_id() const -> int { return 3; }
@@ -127,35 +114,40 @@ public:
     }
 
     // --- Using std::visit with variants ---
-    // --- Using std::visit with variants ---
-	auto get_state_info() const -> std::string {
-		return std::visit([]<typename T>(const T& state) -> std::string {
-			char buffer[128];
-			if constexpr (std::is_same_v<T, IdleState>) {
-				return "Idle - Waiting for commands";
-			} else if constexpr (std::is_same_v<T, MonitoringState>) {
-				snprintf(buffer, sizeof(buffer), "Monitoring - Avg: %.2f, Samples: %d",
-						state.average_value, state.sample_count);
-				return std::string(buffer);
-			} else if constexpr (std::is_same_v<T, AlertState>) {
-				snprintf(buffer, sizeof(buffer), "ALERT: %.*s (Threshold: %.1f)",
-						static_cast<int>(state.message.length()),
-						state.message.data(),
-						state.threshold);
-				return std::string(buffer);
-			} else if constexpr (std::is_same_v<T, CalibratingState>) {
-				snprintf(buffer, sizeof(buffer), "Calibrating - Ref: %.2f, Step: %d",
-						state.reference_value, state.calibration_step);
-				return std::string(buffer);
-			}
-		}, current_state_);
-	}
+    auto get_state_info() const -> std::string_view {
+        return std::visit([]<typename T>(const T& state) -> std::string_view {
+            static std::array<char, 128> buffer{};  // Static buffer
+            
+            if constexpr (std::is_same_v<T, IdleState>) {
+                return "Idle - Waiting for commands"sv;
+            } else if constexpr (std::is_same_v<T, MonitoringState>) {
+                const auto len = snprintf(buffer.data(), buffer.size(),
+                    "Monitoring - Avg: %.2f, Samples: %d",
+                    state.average_value, state.sample_count);
+                return {buffer.data(), static_cast<size_t>(len)};
+            } else if constexpr (std::is_same_v<T, AlertState>) {
+                const auto len = snprintf(buffer.data(), buffer.size(),
+                    "ALERT: %.*s (Threshold: %.1f)",
+                    static_cast<int>(state.message.length()),
+                    state.message.data(),
+                    state.threshold);
+                return {buffer.data(), static_cast<size_t>(len)};
+            } else if constexpr (std::is_same_v<T, CalibratingState>) {
+                const auto len = snprintf(buffer.data(), buffer.size(),
+                    "Calibrating - Ref: %.2f, Step: %d",
+                    state.reference_value, state.calibration_step);
+                return {buffer.data(), static_cast<size_t>(len)};
+            }
+            return "Unknown State"sv;
+        }, current_state_);
+    }
 
     // --- Process sensors using span ---
     template<SensorType... Sensors>
     auto process_sensors(Sensors&&... sensors) -> void {
-        // Create span of sensor readings
-        std::array<float, sizeof...(sensors)> readings{sensors.read()...};
+        // Create array of sensor readings (no dynamic allocation)
+        constexpr size_t sensor_count = sizeof...(sensors);
+        std::array<float, sensor_count> readings{sensors.read()...};
         std::span<const float> readings_span{readings};
         
         // Update buffer with first reading
@@ -176,15 +168,17 @@ public:
                 state.sample_count++;
                 
                 // Calculate average using span
+                const auto active_count = std::min(buffer_index_, sensor_buffer_.size());
+                const auto active_span = std::span{sensor_buffer_.data(), active_count};
+                
                 float sum = 0;
-                size_t count = std::min(buffer_index_, sensor_buffer_.size());
-                for (size_t i = 0; i < count; ++i) {
-                    sum += sensor_buffer_[i];
+                for (auto val : active_span) {
+                    sum += val;
                 }
-                state.average_value = (count > 0) ? sum / count : 0.0f;
+                state.average_value = (active_count > 0) ? sum / active_count : 0.0f;
                 
                 if (state.average_value > 30.0f) {
-                    transition_to(AlertState{"Temperature High", 30.0f});
+                    transition_to(AlertState{"Temperature High"sv, 30.0f});
                 }
             } else if constexpr (std::is_same_v<T, AlertState>) {
                 if (!readings_span.empty() && readings_span[0] < 25.0f) {
@@ -203,15 +197,13 @@ public:
     auto get_buffer_stats() const -> std::tuple<float, float> {
         if (buffer_index_ == 0) return {0.0f, 0.0f};
         
-        std::span<const float> active_buffer{
-            sensor_buffer_.data(), 
-            std::min(buffer_index_, sensor_buffer_.size())
-        };
+        const auto active_count = std::min(buffer_index_, sensor_buffer_.size());
+        const auto active_span = std::span{sensor_buffer_.data(), active_count};
         
         float min_val = std::numeric_limits<float>::max();
         float max_val = std::numeric_limits<float>::lowest();
         
-        for (auto val : active_buffer) {
+        for (auto val : active_span) {
             min_val = std::min(min_val, val);
             max_val = std::max(max_val, val);
         }
@@ -239,11 +231,13 @@ public:
         auto [min_val, max_val] = state_machine_.get_buffer_stats();
         
         // Log state with buffer info
-        LOG_INF("State: %s | Buffer: %zu samples | Range: [%.1f, %.1f]",
-            state_machine_.get_state_info().c_str(),
-            std::min(state_machine_.get_buffer_index(), 
-                    static_cast<size_t>(10)),
-            min_val, max_val);
+        const auto state_info = state_machine_.get_state_info();
+        LOG_INF("State: %.*s | Buffer: %zu samples | Range: [%.1f, %.1f]",
+            static_cast<int>(state_info.length()),
+            state_info.data(),
+            state_machine_.get_buffer_index(),
+            static_cast<double>(min_val), 
+            static_cast<double>(max_val));
     }
     
     [[nodiscard]] auto get_state_id() const -> StateId {
@@ -251,16 +245,15 @@ public:
     }
 };
 
-// --- Thread Functions with C++23 Features ---
+// --- Thread Functions ---
 void state_monitor_thread([[maybe_unused]] void* p1, [[maybe_unused]] void* p2, [[maybe_unused]] void* p3) {
-    auto thread_id = reinterpret_cast<int>(p1);
+    const auto thread_id = reinterpret_cast<intptr_t>(p1);
     StateMachineManager manager;
-    const char* task_name = zephyr_get_task_name();
     
     while (true) {
         // if with initializer
         if (auto state = manager.get_state_id(); state == StateId::ALERT) {
-            LOG_WRN("Thread %d: CRITICAL ALERT STATE", thread_id);
+            LOG_WRN("Thread %ld: CRITICAL ALERT STATE", static_cast<long>(thread_id));
         }
         
         manager.update();
@@ -269,10 +262,10 @@ void state_monitor_thread([[maybe_unused]] void* p1, [[maybe_unused]] void* p2, 
 }
 
 void sensor_processor_thread([[maybe_unused]] void* p1, [[maybe_unused]] void* p2, [[maybe_unused]] void* p3) {
-    const char* task_name = zephyr_get_task_name();
-    std::vector<StateMachineManager> managers(3);
+    // Changed from std::vector to std::array (static allocation)
+    std::array<StateMachineManager, 3> managers{};
     
-    // Range-based for with init - using the manager
+    // Range-based for with init
     for (size_t i = 0; auto& manager : managers) {
         LOG_INF("Initialized manager %zu", i++);
         manager.update();
@@ -327,7 +320,6 @@ void main_thread_entry(void* p1, void* p2, void* p3) {
     k_thread_name_set(&sensor_proc_thread, "SensorProc");
     
     // Main loop
-    const char* main_task_name = zephyr_get_task_name();
     int cycle = 0;
     
     while (true) {
