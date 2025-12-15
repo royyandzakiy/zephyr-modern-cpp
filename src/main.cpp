@@ -131,30 +131,41 @@ class StateMachine {
 	}
 
 	auto get_state_info() const -> std::string_view {
-		return std::visit(
-			[]<typename T>(const T &state) -> std::string_view {
-				static std::array<char, 128> buf{};
+		// clang-format off
+        return std::visit([]<typename T>(const T& state) -> std::string_view {
+            static std::array<char, 128> buf{};
 
-				if constexpr (std::is_same_v<T, IdleState>) {
-					return "Idle - Waiting for commands"sv;
-				} else if constexpr (std::is_same_v<T, MonitoringState>) {
-					int len = snprintf(buf.data(), buf.size(), "Monitoring - Avg: %d.%02d, Samples: %d",
-									   ipart(state.average_centi), fpart(state.average_centi), state.sample_count);
-					return {buf.data(), (size_t)len};
-				} else if constexpr (std::is_same_v<T, AlertState>) {
-					int len = snprintf(buf.data(), buf.size(), "ALERT: %.*s (Threshold: %d.%02d)",
-									   (int)state.message.length(), state.message.data(), ipart(state.threshold_centi),
-									   fpart(state.threshold_centi));
-					return {buf.data(), (size_t)len};
-				} else if constexpr (std::is_same_v<T, CalibratingState>) {
-					int len =
-						snprintf(buf.data(), buf.size(), "Calibrating - Ref: %d.%02d, Step: %d",
-								 ipart(state.reference_centi), fpart(state.reference_centi), state.calibration_step);
-					return {buf.data(), (size_t)len};
-				}
-				return "Unknown"sv;
-			},
-			current_state_);
+            if constexpr (std::is_same_v<T, IdleState>) {
+                return "Idle - Waiting for commands"sv;
+            }
+            else if constexpr (std::is_same_v<T, MonitoringState>) {
+                int len = snprintf(buf.data(), buf.size(),
+                    "Monitoring - Avg: %d.%02d, Samples: %d",
+                    ipart(state.average_centi),
+                    fpart(state.average_centi),
+                    state.sample_count);
+                return {buf.data(), (size_t)len};
+            }
+            else if constexpr (std::is_same_v<T, AlertState>) {
+                int len = snprintf(buf.data(), buf.size(),
+                    "ALERT: %.*s (Threshold: %d.%02d)",
+                    (int)state.message.length(),
+                    state.message.data(),
+                    ipart(state.threshold_centi),
+                    fpart(state.threshold_centi));
+                return {buf.data(), (size_t)len};
+            }
+            else if constexpr (std::is_same_v<T, CalibratingState>) {
+                int len = snprintf(buf.data(), buf.size(),
+                    "Calibrating - Ref: %d.%02d, Step: %d",
+                    ipart(state.reference_centi),
+                    fpart(state.reference_centi),
+                    state.calibration_step);
+                return {buf.data(), (size_t)len};
+            }
+            return "Unknown"sv;
+        }, current_state_);
+		// clang-format on
 	}
 
 	template <SensorType... Sensors> auto process_sensors(Sensors &&...sensors) -> void {
@@ -166,38 +177,41 @@ class StateMachine {
 			buffer_index_++;
 		}
 
-		std::visit(
-			[this, span](auto &state) {
-				using T = std::decay_t<decltype(state)>;
+		// clang-format off
+		std::visit([this, span](auto& state) {
+            using T = std::decay_t<decltype(state)>;
 
-				if constexpr (std::is_same_v<T, IdleState>) {
-					if (!span.empty() && span[0] > 2000) {
-						transition_to(MonitoringState{span[0], 1});
-					}
-				} else if constexpr (std::is_same_v<T, MonitoringState>) {
-					state.sample_count++;
+            if constexpr (std::is_same_v<T, IdleState>) {
+                if (!span.empty() && span[0] > 2000) {
+                    transition_to(MonitoringState{span[0], 1});
+                }
+            }
+            else if constexpr (std::is_same_v<T, MonitoringState>) {
+                state.sample_count++;
 
-					size_t n = std::min(buffer_index_, sensor_buffer_.size());
-					int64_t sum = 0;
-					for (size_t i = 0; i < n; ++i)
-						sum += sensor_buffer_[i];
+                size_t n = std::min(buffer_index_, sensor_buffer_.size());
+                int64_t sum = 0;
+                for (size_t i = 0; i < n; ++i)
+                    sum += sensor_buffer_[i];
 
-					state.average_centi = (n > 0) ? (sum / (int64_t)n) : 0;
+                state.average_centi = (n > 0) ? (sum / (int64_t)n) : 0;
 
-					if (state.average_centi > 3000) {
-						transition_to(AlertState{"Temperature High"sv, 3000});
-					}
-				} else if constexpr (std::is_same_v<T, AlertState>) {
-					if (!span.empty() && span[0] < 2500) {
-						transition_to(CalibratingState{2250, 1});
-					}
-				} else if constexpr (std::is_same_v<T, CalibratingState>) {
-					if (++state.calibration_step > 5) {
-						transition_to(IdleState{});
-					}
-				}
-			},
-			current_state_);
+                if (state.average_centi > 3000) {
+                    transition_to(AlertState{"Temperature High"sv, 3000});
+                }
+            }
+            else if constexpr (std::is_same_v<T, AlertState>) {
+                if (!span.empty() && span[0] < 2500) {
+                    transition_to(CalibratingState{2250, 1});
+                }
+            }
+            else if constexpr (std::is_same_v<T, CalibratingState>) {
+                if (++state.calibration_step > 5) {
+                    transition_to(IdleState{});
+                }
+            }
+        }, current_state_);
+		// clang-format on
 	}
 
 	auto get_buffer_stats() const -> std::tuple<int32_t, int32_t> {
