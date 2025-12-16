@@ -114,7 +114,7 @@ target_compile_options(app PRIVATE -std=gnu++23)
 
 ```
 src/
-├── zephyr_span_visit_concept.cpp   # C++23 state machine and sensor example
+├── main.cpp   # C++23 state machine and sensor example
 ```
 
 ## Usage

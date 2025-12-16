@@ -28,6 +28,12 @@ using namespace std::string_view_literals;
 constexpr auto STATE_UPDATE_INTERVAL = 2000ms;
 constexpr auto LOG_INTERVAL = 5000ms;
 
+constexpr int32_t TEMP_THRESHOLD_START_MONITORING = 2000; // 20.00°C
+constexpr int32_t TEMP_THRESHOLD_ALERT = 3000;			  // 30.00°C
+constexpr int32_t TEMP_THRESHOLD_RECOVERY = 2500;		  // 25.00°C
+constexpr int32_t CALIBRATION_REFERENCE_TEMP = 2250;	  // 22.50°C
+constexpr int MAX_CALIBRATION_STEPS = 5;
+
 // --- Time utilities for Zephyr ---
 inline auto zephyr_sleep_for(std::chrono::milliseconds duration) {
 	k_msleep(duration.count());
@@ -48,13 +54,6 @@ constexpr int fpart(int v) {
 	return v < 0 ? -(v % SCALE) : (v % SCALE);
 }
 
-// --- Concepts & Constraints ---
-template <typename T>
-concept SensorType = requires(T t) {
-	{ t.read() } -> std::convertible_to<int32_t>;
-	{ t.get_id() } -> std::convertible_to<int>;
-};
-
 // --- State Variant Definition ---
 enum class StateId {
 	IDLE,
@@ -64,21 +63,28 @@ enum class StateId {
 };
 struct IdleState {};
 struct MonitoringState {
-	int32_t average_centi;
+	int32_t average_temp_value;
 	int sample_count;
 };
 
 struct AlertState {
 	std::string_view message;
-	int32_t threshold_centi;
+	int32_t threshold_temp_value;
 };
 
 struct CalibratingState {
-	int32_t reference_centi;
+	int32_t reference_temp_value;
 	int calibration_step;
 };
 
 using StateVariant = std::variant<IdleState, MonitoringState, AlertState, CalibratingState>;
+
+// --- Concepts & Constraints ---
+template <typename T>
+concept SensorType = requires(T t) {
+	{ t.read() } -> std::convertible_to<int32_t>;
+	{ t.get_id() } -> std::convertible_to<int>;
+};
 
 // --- Sensor Concepts Implementation ---
 class TemperatureSensor {
@@ -117,7 +123,7 @@ class StateMachine {
 	StateVariant current_state_{IdleState{}};
 	StateId current_id_{StateId::IDLE};
 
-	std::array<int32_t, 10> sensor_buffer_{};
+	std::array<int32_t, 10> reading_circ_buffer_{};
 	size_t buffer_index_{0};
 
   public:
@@ -141,8 +147,8 @@ class StateMachine {
             else if constexpr (std::is_same_v<T, MonitoringState>) {
                 int len = snprintf(buf.data(), buf.size(),
                     "Monitoring - Avg: %d.%02d, Samples: %d",
-                    ipart(state.average_centi),
-                    fpart(state.average_centi),
+                    ipart(state.average_temp_value),
+                    fpart(state.average_temp_value),
                     state.sample_count);
                 return {buf.data(), (size_t)len};
             }
@@ -151,15 +157,15 @@ class StateMachine {
                     "ALERT: %.*s (Threshold: %d.%02d)",
                     (int)state.message.length(),
                     state.message.data(),
-                    ipart(state.threshold_centi),
-                    fpart(state.threshold_centi));
+                    ipart(state.threshold_temp_value),
+                    fpart(state.threshold_temp_value));
                 return {buf.data(), (size_t)len};
             }
             else if constexpr (std::is_same_v<T, CalibratingState>) {
                 int len = snprintf(buf.data(), buf.size(),
                     "Calibrating - Ref: %d.%02d, Step: %d",
-                    ipart(state.reference_centi),
-                    fpart(state.reference_centi),
+                    ipart(state.reference_temp_value),
+                    fpart(state.reference_temp_value),
                     state.calibration_step);
                 return {buf.data(), (size_t)len};
             }
@@ -169,62 +175,66 @@ class StateMachine {
 	}
 
 	template <SensorType... Sensors> auto process_sensors(Sensors &&...sensors) -> void {
-		std::array<int32_t, sizeof...(sensors)> readings{sensors.read()...};
-		std::span<const int32_t> span{readings};
+		const std::array current_readings{sensors.read()...};
+		const std::span readings_view{current_readings};
 
-		if (!span.empty()) {
-			sensor_buffer_[buffer_index_ % sensor_buffer_.size()] = span[0];
-			buffer_index_++;
-		}
+		// Extract primary sensor data for clear intent
+		const int32_t current_temp = readings_view[0];
+		const size_t history_count = std::min(buffer_index_, reading_circ_buffer_.size());
 
-		// clang-format off
-		std::visit([this, span](auto& state) {
-            using T = std::decay_t<decltype(state)>;
+		// Update circular buffer
+		reading_circ_buffer_[buffer_index_ % reading_circ_buffer_.size()] = current_temp;
+		buffer_index_++;
 
-            if constexpr (std::is_same_v<T, IdleState>) {
-                if (!span.empty() && span[0] > 2000) {
-                    transition_to(MonitoringState{span[0], 1});
-                }
-            }
-            else if constexpr (std::is_same_v<T, MonitoringState>) {
-                state.sample_count++;
+		std::visit(
+			[this, current_temp, history_count]<typename T>(T &state) {
+				if constexpr (std::is_same_v<T, IdleState>) {
+					if (current_temp > TEMP_THRESHOLD_START_MONITORING) {
+						transition_to(MonitoringState{current_temp, 1});
+					}
+				}
 
-                size_t n = std::min(buffer_index_, sensor_buffer_.size());
-                int64_t sum = 0;
-                for (size_t i = 0; i < n; ++i)
-                    sum += sensor_buffer_[i];
+				else if constexpr (std::is_same_v<T, MonitoringState>) {
+					state.sample_count++;
 
-                state.average_centi = (n > 0) ? (sum / (int64_t)n) : 0;
+					int64_t sum = 0;
+					for (size_t i = 0; i < history_count; ++i) {
+						sum += reading_circ_buffer_[i];
+					}
 
-                if (state.average_centi > 3000) {
-                    transition_to(AlertState{"Temperature High"sv, 3000});
-                }
-            }
-            else if constexpr (std::is_same_v<T, AlertState>) {
-                if (!span.empty() && span[0] < 2500) {
-                    transition_to(CalibratingState{2250, 1});
-                }
-            }
-            else if constexpr (std::is_same_v<T, CalibratingState>) {
-                if (++state.calibration_step > 5) {
-                    transition_to(IdleState{});
-                }
-            }
-        }, current_state_);
-		// clang-format on
+					state.average_temp_value = static_cast<int32_t>(sum / history_count);
+
+					if (state.average_temp_value > TEMP_THRESHOLD_ALERT) {
+						transition_to(AlertState{"Temperature High"sv, TEMP_THRESHOLD_ALERT});
+					}
+				}
+
+				else if constexpr (std::is_same_v<T, AlertState>) {
+					if (current_temp < TEMP_THRESHOLD_RECOVERY) {
+						transition_to(CalibratingState{CALIBRATION_REFERENCE_TEMP, 1});
+					}
+				}
+
+				else if constexpr (std::is_same_v<T, CalibratingState>) {
+					if (++state.calibration_step > MAX_CALIBRATION_STEPS) {
+						transition_to(IdleState{});
+					}
+				}
+			},
+			current_state_);
 	}
 
 	auto get_buffer_stats() const -> std::tuple<int32_t, int32_t> {
 		if (buffer_index_ == 0)
 			return {0, 0};
 
-		size_t n = std::min(buffer_index_, sensor_buffer_.size());
-		int32_t min_v = sensor_buffer_[0];
-		int32_t max_v = sensor_buffer_[0];
+		size_t n = std::min(buffer_index_, reading_circ_buffer_.size());
+		int32_t min_v = reading_circ_buffer_[0];
+		int32_t max_v = reading_circ_buffer_[0];
 
 		for (size_t i = 1; i < n; ++i) {
-			min_v = std::min(min_v, sensor_buffer_[i]);
-			max_v = std::max(max_v, sensor_buffer_[i]);
+			min_v = std::min(min_v, reading_circ_buffer_[i]);
+			max_v = std::max(max_v, reading_circ_buffer_[i]);
 		}
 		return {min_v, max_v};
 	}
