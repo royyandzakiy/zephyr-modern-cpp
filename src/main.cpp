@@ -123,7 +123,7 @@ class StateMachine {
 	StateVariant current_state_{IdleState{}};
 	StateId current_id_{StateId::IDLE};
 
-	std::array<int32_t, 10> reading_circ_buffer_{};
+	std::array<int32_t, 10> temp_data_circbuf_{};
 	size_t buffer_index_{0};
 
   public:
@@ -182,10 +182,10 @@ class StateMachine {
 
 		// Extract primary sensor data for clear intent
 		const int32_t current_temp = readings_view[0];
-		const size_t history_count = std::min(buffer_index_, reading_circ_buffer_.size());
+		const size_t history_count = std::min(buffer_index_, temp_data_circbuf_.size());
 
 		// Update circular buffer
-		reading_circ_buffer_[buffer_index_ % reading_circ_buffer_.size()] = current_temp;
+		temp_data_circbuf_[buffer_index_ % temp_data_circbuf_.size()] = current_temp;
 		buffer_index_++;
 
 		std::visit(
@@ -201,7 +201,7 @@ class StateMachine {
 
 					int64_t sum = 0;
 					for (size_t i = 0; i < history_count; ++i) {
-						sum += reading_circ_buffer_[i];
+						sum += temp_data_circbuf_[i];
 					}
 
 					state.average_temp_value = static_cast<int32_t>(sum / history_count);
@@ -226,19 +226,22 @@ class StateMachine {
 			current_state_);
 	}
 
-	auto get_buffer_stats() const -> std::tuple<int32_t, int32_t> {
-		if (buffer_index_ == 0)
+	auto get_history_range() const -> std::tuple<int32_t, int32_t> {
+		if (buffer_index_ == 0) {
 			return {0, 0};
-
-		size_t n = std::min(buffer_index_, reading_circ_buffer_.size());
-		int32_t min_v = reading_circ_buffer_[0];
-		int32_t max_v = reading_circ_buffer_[0];
-
-		for (size_t i = 1; i < n; ++i) {
-			min_v = std::min(min_v, reading_circ_buffer_[i]);
-			max_v = std::max(max_v, reading_circ_buffer_[i]);
 		}
-		return {min_v, max_v};
+
+		const size_t history_count = std::min(buffer_index_, temp_data_circbuf_.size());
+
+		int32_t min_temp = temp_data_circbuf_[0];
+		int32_t max_temp = temp_data_circbuf_[0];
+
+		for (size_t i = 1; i < history_count; ++i) {
+			min_temp = std::min(min_temp, temp_data_circbuf_[i]);
+			max_temp = std::max(max_temp, temp_data_circbuf_[i]);
+		}
+
+		return {min_temp, max_temp};
 	}
 
 	auto get_current_state_id() const -> StateId {
@@ -258,11 +261,11 @@ class StateMachineManager {
 	auto update() -> void {
 		sm_.process_sensors(t_, h_, p_);
 
-		auto [min_v, max_v] = sm_.get_buffer_stats();
+		auto [min_temp, max_temp] = sm_.get_history_range();
 		auto info = sm_.get_state_info();
 
 		LOG_INF("State: %.*s | Buffer: %zu | Range: [%d.%02d, %d.%02d]", (int)info.length(), info.data(),
-				sm_.get_buffer_index(), ipart(min_v), fpart(min_v), ipart(max_v), fpart(max_v));
+				sm_.get_buffer_index(), ipart(min_temp), fpart(min_temp), ipart(max_temp), fpart(max_temp));
 	}
 
 	auto get_state_id() const -> StateId {
