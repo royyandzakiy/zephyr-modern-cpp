@@ -89,6 +89,8 @@ template <typename... T> struct Overloaded : T... {
 // deduction guide if using C++17. in C++20 solved by Class Template Argument Deduction (CTAD) for aggregates
 // template <typename... T> Overloaded(T...) -> Overloaded<T...>; // no need
 
+template <typename...> constexpr bool uncovered_type_exists = false;
+
 // --- Concepts & Constraints ---
 template <typename T>
 concept SensorType = requires(T t) {
@@ -146,6 +148,16 @@ class StateMachine {
 		current_id_ = static_cast<StateId>(current_state_.index());
 	}
 
+	template <typename T> auto transition_to(T &&s) -> void {
+		// another option is to use transition_to(StateVariant s) as param, but causes to call copy,
+		// instead of moving rvalue
+
+		auto old_id_ = current_id_;
+		current_state_ = std::forward<T>(s);
+		current_id_ = static_cast<StateId>(current_state_.index());
+		LOG_INF("Transitioned State ID: from [%d] to [%d]", static_cast<int>(old_id_), static_cast<int>(current_id_));
+	}
+
 	auto get_state_info() const -> std::string_view {
 		static std::array<char, 128> state_info{};
 		constexpr size_t size = state_info.size();
@@ -197,14 +209,13 @@ class StateMachine {
 			[this, current_temp, history_count]<typename Traw>(Traw &state) {
 				using T = std::decay_t<Traw>; // cleanup any const/refs
 
-				// this way, no enforcement to ensure all Variant types are covered by the compiler
+				// this way, enforcement to ensure all Variant types are covered by the compiler becomes optional (else,
+				// via static_assert). if I ommit the else, we can have a non-exhaustive "state machine"
 				if constexpr (std::is_same_v<T, IdleState>) {
 					if (current_temp > TEMP_THRESHOLD_START_MONITORING) {
 						transition_to(MonitoringState{current_temp, 1});
 					}
-				}
-
-				else if constexpr (std::is_same_v<T, MonitoringState>) {
+				} else if constexpr (std::is_same_v<T, MonitoringState>) {
 					state.sample_count++;
 
 					auto sum =
@@ -215,18 +226,19 @@ class StateMachine {
 					if (state.average_temp_value > TEMP_THRESHOLD_ALERT) {
 						transition_to(AlertState{"Temperature High"sv, TEMP_THRESHOLD_ALERT});
 					}
-				}
-
-				else if constexpr (std::is_same_v<T, AlertState>) {
+				} else if constexpr (std::is_same_v<T, AlertState>) {
 					if (current_temp < TEMP_THRESHOLD_RECOVERY) {
 						transition_to(CalibratingState{CALIBRATION_REFERENCE_TEMP, 1});
 					}
-				}
-
-				else if constexpr (std::is_same_v<T, CalibratingState>) {
+				} else if constexpr (std::is_same_v<T, CalibratingState>) {
 					if (++state.calibration_step > MAX_CALIBRATION_STEPS) {
 						transition_to(IdleState{});
 					}
+				} else if constexpr (std::is_same_v<T, std::monostate>) {
+					transition_to(IdleState{});
+				} else {
+					// C++23: If a new state is added to StateVariant but not handled yet, force compile error
+					static_assert(uncovered_type_exists<T>, "Non-exhaustive visitor: You forgot to handle a state!");
 				}
 			},
 			current_state_);
