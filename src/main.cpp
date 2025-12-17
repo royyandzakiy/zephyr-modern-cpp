@@ -79,6 +79,14 @@ struct CalibratingState {
 
 using StateVariant = std::variant<IdleState, MonitoringState, AlertState, CalibratingState>;
 
+// --- Overloaded Helper ---
+
+template <typename... T> struct Overloaded : T... {
+	using T::operator()...;
+};
+// deduction guide if using C++17. in C++20 solved by Class Template Argument Deduction (CTAD) for aggregates
+// template <typename... T> Overloaded(T...) -> Overloaded<T...>; // no need
+
 // --- Concepts & Constraints ---
 template <typename T>
 concept SensorType = requires(T t) {
@@ -137,41 +145,30 @@ class StateMachine {
 	}
 
 	auto get_state_info() const -> std::string_view {
+		static std::array<char, 128> info_desc{};
+		constexpr size_t size = info_desc.size();
+
 		// clang-format off
-		return std::visit([]<typename T>(const T& state) -> std::string_view {
-			static std::array<char, 128> description_buffer{};
-			auto* buf = description_buffer.data();
-			auto size = description_buffer.size();
-
-			if constexpr (std::is_same_v<T, IdleState>) {
-				return "Status: Idle - Awaiting sensor trigger"sv;
-			} 
-			
-			else if constexpr (std::is_same_v<T, MonitoringState>) {
-				int len = snprintf(buf, size, "Status: Monitoring [Avg: %d.%02d°C | Samples: %d]", 
-								ipart(state.average_temp_value), 
-								fpart(state.average_temp_value), 
-								state.sample_count);
-				return {buf, static_cast<size_t>(len)};
-			} 
-			
-			else if constexpr (std::is_same_v<T, AlertState>) {
-				int len = snprintf(buf, size, "Status: ALERT [%.*s | Threshold: %d.%02d°C]", 
-								static_cast<int>(state.message.length()), state.message.data(),
-								ipart(state.threshold_temp_value), 
-								fpart(state.threshold_temp_value));
-				return {buf, static_cast<size_t>(len)};
-			} 
-			
-			else if constexpr (std::is_same_v<T, CalibratingState>) {
-				int len = snprintf(buf, size, "Status: Calibrating [Ref: %d.%02d°C | Step: %d/5]", 
-								ipart(state.reference_temp_value), 
-								fpart(state.reference_temp_value), 
-								state.calibration_step);
-				return {buf, static_cast<size_t>(len)};
+		return std::visit(Overloaded{
+			[](const IdleState&) -> std::string_view {
+				return "Status: Idle - Awaiting for sensor trigger"sv;
+			},
+			[](const MonitoringState& s) -> std::string_view {
+				int len = snprintf(info_desc.data(), size, "Status: Monitoring [Avg: %d.%02d°C | Samples: %d]",
+									ipart(s.average_temp_value), fpart(s.average_temp_value), s.sample_count);
+				return { info_desc.data(), static_cast<size_t>(len) };
+			},
+			[](const AlertState& s) -> std::string_view {
+				int len = snprintf(info_desc.data(), size, "Status: ALERT [%.*s | Threshold: %d.%02d°C]", 
+								static_cast<int>(s.message.length()), s.message.data(),
+								ipart(s.threshold_temp_value), fpart(s.threshold_temp_value));
+				return {info_desc.data(), static_cast<size_t>(len)};
+			},
+			[](const CalibratingState& s) -> std::string_view {
+				int len = snprintf(info_desc.data(), size, "Status: Calibrating [Ref: %d.%02d°C | Step: %d/5]", 
+								ipart(s.reference_temp_value), fpart(s.reference_temp_value), s.calibration_step);
+				return {info_desc.data(), static_cast<size_t>(len)};
 			}
-
-			return "Status: Unknown"sv;
 		}, current_state_);
 		// clang-format on
 	}
