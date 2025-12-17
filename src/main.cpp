@@ -77,6 +77,7 @@ struct CalibratingState {
 	int calibration_step;
 };
 
+// monostate enables the StateVariant type to be initialized without specifying the exact Variant type
 using StateVariant = std::variant<std::monostate, IdleState, MonitoringState, AlertState, CalibratingState>;
 
 // --- Overloaded Helper ---
@@ -154,6 +155,7 @@ class StateMachine {
 				return "Status: Idle - Awaiting for sensor trigger"sv;
 			},
 			[](const MonitoringState& s) -> std::string_view {
+				// psst: not using std::format because the zephyr SDK does not have #include <format>
 				int len = snprintf(state_info.data(), size, "Status: Monitoring [Avg: %d.%02d°C | Samples: %d]",
 									ipart(s.average_temp_value), fpart(s.average_temp_value), s.sample_count);
 				return { state_info.data(), static_cast<size_t>(len) };
@@ -170,6 +172,7 @@ class StateMachine {
 				return {state_info.data(), static_cast<size_t>(len)};
 			},
 			[](const auto&) -> std::string_view {
+				// default fallback
 				return "Status: Unknown State! [Error]"sv;
 			}
 		}, current_state_);
