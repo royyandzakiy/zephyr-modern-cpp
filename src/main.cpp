@@ -145,8 +145,8 @@ class StateMachine {
 	}
 
 	auto get_state_info() const -> std::string_view {
-		static std::array<char, 128> info_desc{};
-		constexpr size_t size = info_desc.size();
+		static std::array<char, 128> state_info{};
+		constexpr size_t size = state_info.size();
 
 		// clang-format off
 		return std::visit(Overloaded{
@@ -154,20 +154,20 @@ class StateMachine {
 				return "Status: Idle - Awaiting for sensor trigger"sv;
 			},
 			[](const MonitoringState& s) -> std::string_view {
-				int len = snprintf(info_desc.data(), size, "Status: Monitoring [Avg: %d.%02d°C | Samples: %d]",
+				int len = snprintf(state_info.data(), size, "Status: Monitoring [Avg: %d.%02d°C | Samples: %d]",
 									ipart(s.average_temp_value), fpart(s.average_temp_value), s.sample_count);
-				return { info_desc.data(), static_cast<size_t>(len) };
+				return { state_info.data(), static_cast<size_t>(len) };
 			},
 			[](const AlertState& s) -> std::string_view {
-				int len = snprintf(info_desc.data(), size, "Status: ALERT [%.*s | Threshold: %d.%02d°C]", 
+				int len = snprintf(state_info.data(), size, "Status: ALERT [%.*s | Threshold: %d.%02d°C]", 
 								static_cast<int>(s.message.length()), s.message.data(),
 								ipart(s.threshold_temp_value), fpart(s.threshold_temp_value));
-				return {info_desc.data(), static_cast<size_t>(len)};
+				return {state_info.data(), static_cast<size_t>(len)};
 			},
 			[](const CalibratingState& s) -> std::string_view {
-				int len = snprintf(info_desc.data(), size, "Status: Calibrating [Ref: %d.%02d°C | Step: %d/5]", 
+				int len = snprintf(state_info.data(), size, "Status: Calibrating [Ref: %d.%02d°C | Step: %d/5]", 
 								ipart(s.reference_temp_value), fpart(s.reference_temp_value), s.calibration_step);
-				return {info_desc.data(), static_cast<size_t>(len)};
+				return {state_info.data(), static_cast<size_t>(len)};
 			}
 		}, current_state_);
 		// clang-format on
