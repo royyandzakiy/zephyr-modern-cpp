@@ -77,7 +77,7 @@ struct CalibratingState {
 	int calibration_step;
 };
 
-using StateVariant = std::variant<IdleState, MonitoringState, AlertState, CalibratingState>;
+using StateVariant = std::variant<std::monostate, IdleState, MonitoringState, AlertState, CalibratingState>;
 
 // --- Overloaded Helper ---
 
@@ -168,6 +168,9 @@ class StateMachine {
 				int len = snprintf(state_info.data(), size, "Status: Calibrating [Ref: %d.%02d°C | Step: %d/5]", 
 								ipart(s.reference_temp_value), fpart(s.reference_temp_value), s.calibration_step);
 				return {state_info.data(), static_cast<size_t>(len)};
+			},
+			[](const auto&) -> std::string_view {
+				return "Status: Unknown State! [Error]"sv;
 			}
 		}, current_state_);
 		// clang-format on
