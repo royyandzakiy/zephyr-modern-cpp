@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstdio>
 #include <limits>
+#include <numeric>
 #include <ranges>
 #include <span>
 #include <string_view>
@@ -151,6 +152,7 @@ class StateMachine {
 
 		// clang-format off
 		return std::visit(Overloaded{
+			// this way, compiler enforces all Variant types to be covered, or else compilation error
 			[](const IdleState&) -> std::string_view {
 				return "Status: Idle - Awaiting for sensor trigger"sv;
 			},
@@ -192,7 +194,10 @@ class StateMachine {
 		buffer_index_++;
 
 		std::visit(
-			[this, current_temp, history_count]<typename T>(T &state) {
+			[this, current_temp, history_count]<typename Traw>(Traw &state) {
+				using T = std::decay_t<Traw>; // cleanup any const/refs
+
+				// this way, no enforcement to ensure all Variant types are covered by the compiler
 				if constexpr (std::is_same_v<T, IdleState>) {
 					if (current_temp > TEMP_THRESHOLD_START_MONITORING) {
 						transition_to(MonitoringState{current_temp, 1});
@@ -202,10 +207,8 @@ class StateMachine {
 				else if constexpr (std::is_same_v<T, MonitoringState>) {
 					state.sample_count++;
 
-					int64_t sum = 0;
-					for (size_t i = 0; i < history_count; ++i) {
-						sum += temp_data_circbuf_[i];
-					}
+					auto sum =
+						std::accumulate(temp_data_circbuf_.begin(), temp_data_circbuf_.begin() + history_count, 0LL);
 
 					state.average_temp_value = static_cast<int32_t>(sum / history_count);
 
